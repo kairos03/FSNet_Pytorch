@@ -13,7 +13,7 @@ from torchvision import datasets, transforms
 
 
 import config
-from model import Net
+from model import fs_resnet
 
 
 # sacred experiment
@@ -25,15 +25,15 @@ ex.observers.append(MongoObserver.create(url=config.MONGO_URI,
 def get_params():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch FSNet')
-    parser.add_argument('--batch-size', type=int, default=128, metavar='N',
-                        help='input batch size for training (default: 512)')
+    parser.add_argument('--batch-size', type=int, default=512, metavar='N',
+                        help='input batch size for training (default: 128)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--workers', type=int, default=2, metavar='N',
                         help='workers for dataloader')
     parser.add_argument('--epochs', type=int, default=300, metavar='N',
                         help='number of epochs to train (default: 14)')
-    parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
+    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
                         help='learning rate (default: 1.0)')
     parser.add_argument('--milestone', type=int, nargs='*', default=[150, 225], metavar='M',
                         help='Learning rate Scheduling milestone (default: [150, 225])')
@@ -61,6 +61,10 @@ def train(args, model, device, train_loader, criterion, optimizer, epoch):
         output = model(data)
         loss = criterion(output, target)
         loss.backward()
+        # gradient logging
+        # for n, m in model.named_modules():
+        #     if 'conv' in n:
+        #         print(m.FS.grad.mean(), m.FS.grad.min(), m.FS.grad.max())
         optimizer.step()
 
         # calculate metric
@@ -72,7 +76,7 @@ def train(args, model, device, train_loader, criterion, optimizer, epoch):
         if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
-                100. * batch_idx / len(train_loader.dataset), loss.item()))
+                100. * batch_idx * len(data) / len(train_loader.dataset), loss/len(data)))
 
     train_loss /= len(train_loader.dataset)
     accuracy = 100. * correct / len(train_loader.dataset)
@@ -156,7 +160,7 @@ def main(args, _seed):
     test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size,
                                              shuffle=False, **kwargs)
 
-    model = Net().to(device)
+    model = fs_resnet(data='cifar10', num_layers=20) .to(device)
     if device == 'cuda':
         model = torch.nn.DataParallel(model)
         cudnn.benchmark = True
@@ -164,10 +168,11 @@ def main(args, _seed):
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
                                 momentum=0.9, weight_decay=5e-4)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [150, 225], args.gamma)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, args.milestone, args.gamma)
 
     for epoch in range(1, args.epochs + 1):
-        train(args, model, device, train_loader, criterion, optimizer, epoch)
+        with torch.autograd.detect_anomaly():
+            train(args, model, device, train_loader, criterion, optimizer, epoch)
         _, last_acc = test(model, device, test_loader, criterion, epoch)
         scheduler.step()
 
