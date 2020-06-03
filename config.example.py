@@ -1,0 +1,2 @@
+MONGO_URI = 'mongodb://USER:PASSWORD@HOST:27017'
+MONGO_DB = 'training'
